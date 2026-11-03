@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background:#0f1115; color:#eee; margin:0; padding:1.25rem; }
+    .row { display:flex; gap:1rem; flex-wrap:wrap; }
+    .card { background:#1a1d24; padding:1rem; border-radius:10px; min-width:140px; }
+    button, a.btn { background:#3b82f6; color:#fff; border:0; padding:.55rem .9rem; border-radius:8px; text-decoration:none; cursor:pointer; display:inline-block; margin:.25rem 0; }
+    table { width:100%; border-collapse:collapse; margin-top:1rem; }
+    th, td { border-bottom:1px solid #333; padding:.45rem; text-align:left; font-size:.9rem; }
+  </style>
+</head>
+<body>
+  <h1>Admin</h1>
+  <div class="row" id="stats">Loading…</div>
+  <p>
+    <button onclick="cleanup()">Cleanup sessions</button>
+    <a class="btn" href="/admin/api/sessions/download">Download sessions zip</a>
+    <a class="btn" href="/admin/api/stats">Raw stats</a>
+  </p>
+  <h2>Users</h2>
+  <div id="users">Loading…</div>
+  <script>
+    async function load() {
+      const s = await (await fetch('/admin/api/stats')).json();
+      const st = s.stats || {};
+      document.getElementById('stats').innerHTML = Object.entries(st).map(([k,v]) =>
+        `<div class="card"><div>${k}</div><strong>${typeof v==='object'?JSON.stringify(v):v}</strong></div>`
+      ).join('');
+      const u = await (await fetch('/admin/api/users')).json();
+      const rows = u.users || [];
+      document.getElementById('users').innerHTML = `<table><tr><th>Phone</th><th>User</th><th>Status</th><th>Telethon</th></tr>` +
+        rows.map(r => `<tr><td>${r.phone||''}</td><td>${r.username||r.user_id||''}</td><td>${r.status||''}</td><td>${r.has_telethon?'yes':'no'}</td></tr>`).join('') +
+        `</table>`;
+    }
+    async function cleanup() {
+      await fetch('/admin/api/sessions/cleanup', { method:'POST' });
+      load();
+    }
+    load();
+  </script>
+</body>
+</html>

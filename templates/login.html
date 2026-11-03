@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Login</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background:#0f1115; color:#eee; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; }
+    .card { background:#1a1d24; padding:1.5rem; border-radius:12px; width:min(400px,92vw); }
+    input, button { width:100%; padding:.75rem; margin:.4rem 0; border-radius:8px; border:1px solid #333; background:#0f1115; color:#fff; box-sizing:border-box; }
+    button { background:#3b82f6; border:0; font-weight:600; cursor:pointer; }
+    .err { color:#f87171; min-height:1.2rem; font-size:.9rem; }
+    .ok { color:#4ade80; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Secure Login</h2>
+    <div class="err" id="msg"></div>
+    <div id="step-phone">
+      <label>Phone (+country code)</label>
+      <input id="phone" placeholder="+1234567890" />
+      <button id="btn-send">Send code</button>
+    </div>
+    <div id="step-code" style="display:none">
+      <label>Telegram code</label>
+      <input id="code" placeholder="12345" />
+      <label>2FA password (if any)</label>
+      <input id="password" type="password" placeholder="optional" />
+      <button id="btn-verify">Verify</button>
+    </div>
+  </div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    let sessionId = params.get('s') || '';
+    const msg = document.getElementById('msg');
+    if (sessionId) {
+      document.getElementById('step-phone').style.display = 'none';
+      document.getElementById('step-code').style.display = 'block';
+      msg.textContent = 'Code sent. Enter it below.';
+      msg.className = 'ok';
+    }
+    document.getElementById('btn-send').onclick = async () => {
+      msg.textContent = ''; msg.className = 'err';
+      const phone = document.getElementById('phone').value.trim();
+      const r = await fetch('/api/bot-connect', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ phone }) });
+      const j = await r.json();
+      if (!j.ok) { msg.textContent = j.error || 'Failed'; return; }
+      sessionId = j.session_id;
+      document.getElementById('step-phone').style.display = 'none';
+      document.getElementById('step-code').style.display = 'block';
+      msg.textContent = 'Code sent to Telegram.'; msg.className = 'ok';
+    };
+    document.getElementById('btn-verify').onclick = async () => {
+      msg.textContent = ''; msg.className = 'err';
+      const body = { session_id: sessionId, code: document.getElementById('code').value.trim(), password: document.getElementById('password').value };
+      const r = await fetch('/api/verify-code', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      const j = await r.json();
+      if (!j.ok) {
+        msg.textContent = j.error || 'Failed';
+        if (j.requires_password) msg.textContent += ' (2FA required)';
+        return;
+      }
+      msg.textContent = 'Logged in!'; msg.className = 'ok';
+    };
+  </script>
+</body>
+</html>
