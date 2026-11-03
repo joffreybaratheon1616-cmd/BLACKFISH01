@@ -2,10 +2,8 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from typing import Optional, Tuple
 
-# DC map (IPv4) used when materialising a Telethon session
 _DC = {
     1: ("149.154.175.53", 443),
     2: ("149.154.167.51", 443),
@@ -16,11 +14,7 @@ _DC = {
 
 
 def pyrogram_client_to_telethon(client) -> Tuple[Optional[str], Optional[bytes]]:
-    """Return (telethon_string, auth_key_bytes) from an authorised Pyrogram client.
-
-    On failure returns (None, None). Pyrogram session_string remains the runtime
-    format for the broadcaster; Telethon is for user-facing export only.
-    """
+    """Return (telethon_string, auth_key_bytes) from an authorised Pyrogram client."""
     try:
         from telethon.crypto import AuthKey
         from telethon.sessions import StringSession
@@ -29,13 +23,11 @@ def pyrogram_client_to_telethon(client) -> Tuple[Optional[str], Optional[bytes]]
 
     try:
         sess = client.session
-        # Pyrogram session stores dc_id and auth_key
-        dc_id = int(getattr(sess, "dc_id", None) or getattr(sess, "dc_id", 2) or 2)
+        dc_id = int(getattr(sess, "dc_id", None) or 2)
         auth_key = getattr(sess, "auth_key", None)
         if auth_key is None:
             return None, None
         if not isinstance(auth_key, (bytes, bytearray)):
-            # Some pyrogram versions expose AuthKey-like objects
             auth_key = getattr(auth_key, "key", None) or bytes(auth_key)
         auth_key = bytes(auth_key)
         if len(auth_key) != 256:
