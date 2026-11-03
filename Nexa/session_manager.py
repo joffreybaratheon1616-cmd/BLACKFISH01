@@ -31,7 +31,7 @@ class ManagedSession:
 
     def is_alive(self):
         try:
-            return bool(self.client and self.client.is_connected)
+            return bool(self.client and getattr(self.client, "is_connected", False))
         except Exception:
             return False
 
@@ -75,6 +75,10 @@ class SessionManager:
                 pass
         return managed
 
+    def create_session(self, session_id, phone):
+        """Alias used by auth_routes."""
+        return self.create_client(session_id, phone=phone)
+
     def get_session(self, session_id):
         with self._lock:
             return self._sessions.get(session_id)
@@ -82,12 +86,23 @@ class SessionManager:
     def remove_session(self, session_id):
         self._drop(session_id, mark="removed")
 
+    def kill_by_phone(self, phone):
+        phone = (phone or "").strip()
+        with self._lock:
+            targets = [sid for sid, s in self._sessions.items() if (s.phone or "") == phone]
+        for sid in targets:
+            self._drop(sid, mark="killed")
+        return len(targets)
+
+    def prune_dead(self):
+        return self.cleanup_dead_sessions()
+
     def _drop(self, session_id, mark=None):
         with self._lock:
             session = self._sessions.pop(session_id, None)
         if session:
             try:
-                if session.client.is_connected:
+                if getattr(session.client, "is_connected", False):
                     session.client.disconnect()
             except Exception:
                 pass
