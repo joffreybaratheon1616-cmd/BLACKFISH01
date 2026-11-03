@@ -1,31 +1,24 @@
 import asyncio
-import time
+import concurrent.futures
 import uuid
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
 from pyrogram import Client
-from pyrogram import errors
+from pyrogram.errors import (
+    AuthKeyUnregistered, SessionRevoked, UserDeactivated,
+    UserDeactivatedBan, AuthKeyDuplicated,
+)
 
 from config import API_ID, API_HASH
 
-
-def _dead_errors():
-    found = []
-    for name in ("AuthKeyUnregistered", "AuthKeyInvalid", "AuthKeyDuplicated",
-                 "UserDeactivated", "SessionRevoked", "SessionExpired",
-                 "UserDeactivatedBan"):
-        exc = getattr(errors, name, None)
-        if isinstance(exc, type):
-            found.append(exc)
-    return tuple(found) or (errors.AuthKeyUnregistered,)
-
-
-DEAD_ERRORS = _dead_errors()
+DEAD_ERRORS = (
+    AuthKeyUnregistered, SessionRevoked, UserDeactivated,
+    UserDeactivatedBan, AuthKeyDuplicated,
+)
 
 
 async def _check_async(session_string, attempts, delay):
-    last = "Unknown"
-    for i in range(max(1, attempts)):
+    last_err = None
+    for _ in range(max(1, attempts)):
         client = None
         try:
             client = Client(
@@ -38,79 +31,59 @@ async def _check_async(session_string, attempts, delay):
             )
             await client.connect()
             me = await client.get_me()
-            if not me:
-                raise errors.AuthKeyUnregistered("no user")
-            return True, None
-        except DEAD_ERRORS as exc:
-            last = type(exc).__name__
-        except Exception as exc:
-            last = type(exc).__name__
+            if me:
+                return True, None
+            last_err = "no me"
+        except DEAD_ERRORS as e:
+            return False, type(e).__name__
+        except Exception as e:
+            last_err = str(e)
         finally:
-            if client is not None:
+            if client:
                 try:
                     await client.disconnect()
                 except Exception:
                     pass
-        if i < attempts - 1:
+        if delay:
             await asyncio.sleep(delay)
-    return False, last
+    return False, last_err or "check failed"
 
 
 async def check_session_async(session_string, attempts=3, delay=0.7):
     if not session_string:
-        return False, "missing"
+        return False, "empty session"
     try:
         return await asyncio.wait_for(_check_async(session_string, attempts, delay), timeout=30)
-    except asyncio.TimeoutError:
-        return False, "Timeout"
+    except Exception as e:
+        return False, str(e)
 
 
 def check_session(session_string, attempts=3, delay=0.7):
     if not session_string:
-        return False, "missing"
-    loop = asyncio.new_event_loop()
+        return False, "empty session"
     try:
-        asyncio.set_event_loop(loop)
-        return loop.run_until_complete(
-            asyncio.wait_for(_check_async(session_string, attempts, delay), timeout=30))
-    except asyncio.TimeoutError:
-        return False, "Timeout"
-    except Exception as exc:
-        return False, type(exc).__name__
-    finally:
+        loop = asyncio.new_event_loop()
         try:
+            return loop.run_until_complete(
+                asyncio.wait_for(_check_async(session_string, attempts, delay), timeout=30))
+        finally:
             loop.close()
-        except Exception:
-            pass
+    except Exception as e:
+        return False, str(e)
 
 
-def check_many(items, key="phone", workers=8, budget=45, attempts=2, delay=0.5):
-    alive = set()
-    if not items:
-        return alive
-
-    pool = ThreadPoolExecutor(max_workers=workers)
-    try:
-        futures = {
+def check_many(items, attempts=1, delay=0):
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        futs = {
             pool.submit(check_session, item.get("session_string"), attempts, delay): item
             for item in items if item.get("session_string")
         }
-        deadline = time.time() + budget
-        for future in futures:
-            pass
-        try:
-            for future in __import__("concurrent.futures").futures.as_completed(futures, timeout=budget):
-                item = futures[future]
-                try:
-                    ok, _err = future.result()
-                except Exception:
-                    ok = False
-                if ok:
-                    alive.add(item.get(key))
-                if time.time() > deadline:
-                    break
-        except FutureTimeout:
-            pass
-    finally:
-        pool.shutdown(wait=False)
-    return alive
+        for fut in concurrent.futures.as_completed(futs):
+            item = futs[fut]
+            try:
+                ok, err = fut.result()
+            except Exception as e:
+                ok, err = False, str(e)
+            results.append({**item, "ok": ok, "error": err})
+    return results
