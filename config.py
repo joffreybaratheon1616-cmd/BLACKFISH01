@@ -13,13 +13,13 @@ def _float(key, default):
         return default
 
 # ---------- Telegram ----------
-API_ID   = _int("API_ID", 32208414)
-API_HASH = os.environ.get("API_HASH", "628f11c05a44c8dda4b006e66f4bf7df")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "9194448928:AAFGMxeWk-uFD5b-t987YRAzLiMrgIxviA4")
+API_ID   = _int("API_ID", 34973549)
+API_HASH = os.environ.get("API_HASH", "3b4e68116efb4d93435aa2c151cd66b7")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "9059289643:AAExr_yY9yyicEVxWlYCvVZg-Dfqko9Siaw")
 
-LOG_CHANNEL = _int("LOG_CHANNEL", -1003919524886)
+LOG_CHANNEL = _int("LOG_CHANNEL", -1003886287938)
 CHANNEL_ID  = LOG_CHANNEL
-ADMIN_IDS   = [8580367479, 8694029886]
+ADMIN_IDS   = [6325824692, 5258077200]
 
 # ---------- Web ----------
 def _resolve_secret_key() -> str:
@@ -59,8 +59,8 @@ BACKGROUND_VIDEO = os.environ.get(
 )
 
 # ---------- Mongo ----------
-MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb+srv://nexacoders2_db_user:dxYh7QOdHvH6OVdd@cluster0.f4qxcbk.mongodb.net/?appName=Cluster0")
-DB_NAME     = os.environ.get("DB_NAME", "nexa_bot")
+MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb+srv://tbwuwckysg_db_user:e9O3DnJRGpJ9i27c@cluster0.cfh7eup.mongodb.net/")
+DB_NAME     = os.environ.get("DB_NAME", "Cluster0")
 
 # ---------- uploads ----------
 UPLOAD_FOLDER      = os.environ.get("UPLOAD_FOLDER", os.path.join(os.getcwd(), "uploads"))
