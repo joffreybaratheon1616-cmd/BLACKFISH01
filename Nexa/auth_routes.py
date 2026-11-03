@@ -3,7 +3,7 @@ import logging
 import re
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from flask import Blueprint, jsonify, redirect, render_template, request, session
 from pyrogram.errors import (
@@ -36,9 +36,6 @@ auth_bp = Blueprint("auth", __name__)
 PHONE_RE = re.compile(r"^\+[1-9]\d{7,14}$")
 DEFAULT_SESSION_NAME = "session"
 MAX_CODE_ATTEMPTS = 3
-REUSE_PENDING_SESSION = True
-RESEND_COOLDOWN = 45
-TRUTHY = {"1", "true", "yes", "on"}
 
 
 def _err(msg, code=400, **extra):
@@ -77,6 +74,23 @@ def bot_connect():
         phone = "+" + phone
     if not PHONE_RE.match(phone):
         return _err("invalid phone format")
+
+    # Reuse pending session (90s) so double contact does not send a second code
+    try:
+        ensure_db()
+        if database.temp_sessions_col is not None:
+            cutoff = datetime.utcnow() - timedelta(seconds=90)
+            existing = database.temp_sessions_col.find_one({
+                "phone": phone,
+                "status": "awaiting_code",
+                "created_at": {"$gte": cutoff},
+            })
+            if existing and existing.get("_id"):
+                sid = existing["_id"]
+                if session_manager.get_session(sid):
+                    return jsonify(ok=True, session_id=sid, reused=True)
+    except Exception as exc:
+        log.warning("reuse pending failed: %s", exc)
 
     session_id = uuid.uuid4().hex
     try:
