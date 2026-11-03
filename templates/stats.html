@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Users &amp; Stats</title>
+<style>
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+       background:#0b0f19;color:#e8ecf4;font-size:14px}
+  .wrap{max-width:1100px;margin:0 auto;padding:20px}
+  h1{font-size:20px}
+  a{color:#7fb2ff}
+  table{width:100%;border-collapse:collapse;margin-top:14px}
+  th,td{text-align:left;padding:9px;border-bottom:1px solid #1d2740;font-size:13px}
+  th{color:#9fb0cc;font-weight:600}
+  button{border:0;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer;
+         background:#3b82f6;color:#fff;margin-right:4px}
+  button.gray{background:#2b3650}
+  button.red{background:#b23b3b}
+  .on{color:#7ee2a8;font-weight:700}
+  .off{color:#ff9b9b;font-weight:700}
+  .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-top:12px}
+  .card{background:#121826;border:1px solid #24304a;border-radius:12px;padding:14px}
+  .muted{color:#8b9ab5}
+  .toast{position:fixed;bottom:18px;right:18px;background:#16213a;border:1px solid #2c3a58;
+         padding:11px 16px;border-radius:10px;display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Users &amp; Stats</h1>
+  <p class="muted"><a href="{{ url_for('admin.admin_panel') }}">Back to panel</a></p>
+
+  <div class="grid">
+    <div class="card"><div class="muted">Total users</div><b>{{ stats.total_users }}</b></div>
+    <div class="card"><div class="muted">Subscribed</div><b>{{ stats.subscribed }}</b></div>
+    <div class="card"><div class="muted">Sent today</div><b>{{ stats.sent_today }}</b></div>
+    <div class="card"><div class="muted">Active sessions</div><b>{{ stats.active_sessions }}</b></div>
+    <div class="card"><div class="muted">Broadcast</div>
+      <b class="{{ 'on' if config.ads_enabled else 'off' }}">{{ 'ON' if config.ads_enabled else 'OFF' }}</b></div>
+  </div>
+
+  <table>
+    <thead><tr><th>Phone</th><th>Name</th><th>Ads</th><th>Next ad</th><th>Session</th><th></th></tr></thead>
+    <tbody>
+    {% for u in users %}
+      <tr>
+        <td>{{ u.phone }}</td>
+        <td>{{ u.first_name or '' }} {{ u.last_name or '' }}</td>
+        <td class="{{ 'on' if u.ads_enabled else 'off' }}">{{ 'ON' if u.ads_enabled else 'OFF' }}</td>
+        <td class="muted">{{ u.next_ad_time }}</td>
+        <td class="{{ 'on' if u.session_string else 'off' }}">{{ 'yes' if u.session_string else 'missing' }}</td>
+        <td>
+          <button class="gray" onclick="act('toggle','{{ u._id }}')">Toggle</button>
+          <button class="gray" onclick="act('reschedule','{{ u._id }}')">Queue</button>
+          <button onclick="act('test','{{ u._id }}')">Test</button>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const CSRF = {{ csrf|tojson }};
+function toast(m, ok) {
+  const t = document.getElementById('toast');
+  t.textContent = m; t.style.borderColor = ok ? '#2f8f5b' : '#b23b3b'; t.style.display = 'block';
+  clearTimeout(t._t); t._t = setTimeout(() => t.style.display = 'none', 3000);
+}
+async function act(kind, id) {
+  const path = kind === 'test' ? '/admin/api/test-send/' + id
+             : '/admin/api/user/' + id + '/' + (kind === 'toggle' ? 'toggle' : 'reschedule');
+  try {
+    const r = await fetch(path, { method: 'POST', headers: { 'X-CSRF-Token': CSRF } });
+    const d = await r.json();
+    if (!r.ok || d.success === false) throw new Error(d.error || 'failed');
+    toast(d.message || 'done', true);
+    setTimeout(() => location.reload(), 900);
+  } catch (e) { toast(e.message); }
+}
+</script>
+</body>
+</html>
